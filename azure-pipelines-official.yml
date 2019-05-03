@@ -26,7 +26,7 @@ jobs:
     VisualStudio.DropName: Products/$(System.TeamProject)/$(Build.Repository.Name)/$(SourceBranchName)/$(Build.BuildNumber)
 
   steps:
-  - powershell: Write-Host “##vso[task.setvariable variable=SourceBranchName]$('$(Build.SourceBranch)'.Substring('refs/head/'.Length))”
+  - powershell: Write-Host “##vso[task.setvariable variable=SourceBranchName]$('$(Build.SourceBranch)'.Substring('refs/heads/'.Length))”
 
   - powershell: Write-Host “##vso[task.setvariable variable=VisualStudio.DropName]$(Products/$(System.TeamProject)/$(Build.Repository.Name)/$(SourceBranchName)/$(Build.BuildNumber))”
 
