@@ -22,13 +22,10 @@ jobs:
     - DotNetFramework
   timeoutInMinutes: 360
 
-  variables:
-    VisualStudio.DropName: Products/$(System.TeamProject)/$(Build.Repository.Name)/$(SourceBranchName)/$(Build.BuildNumber)
-
   steps:
-  - powershell: Write-Host “##vso[task.setvariable variable=SourceBranchName]\$('$(Build.SourceBranch)'.Substring('refs/heads/'.Length))”
+  - powershell: Write-Host "##vso[task.setvariable variable=SourceBranchName]$('$(Build.SourceBranch)'.Substring('refs/heads/'.Length))"
 
-  - powershell: Write-Host “##vso[task.setvariable variable=VisualStudio.DropName]\$(Products/$(System.TeamProject)/$(Build.Repository.Name)/$(SourceBranchName)/$(Build.BuildNumber))”
+  - powershell: Write-Host "##vso[task.setvariable variable=VisualStudio.DropName]Products/$(System.TeamProject)/$(Build.Repository.Name)/$(SourceBranchName)/$(Build.BuildNumber)"
 
   - task: NuGetToolInstaller@0
     inputs:
