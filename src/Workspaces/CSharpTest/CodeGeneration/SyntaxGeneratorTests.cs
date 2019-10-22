@@ -44,14 +44,14 @@ namespace Microsoft.CodeAnalysis.CSharp.UnitTests.Editing
 
         private void VerifySyntax<TSyntax>(SyntaxNode node, string expectedText) where TSyntax : SyntaxNode
         {
-            Assert.IsAssignableFrom(typeof(TSyntax), node);
+            Assert.IsAssignableFrom<TSyntax>(node);
             var normalized = node.NormalizeWhitespace().ToFullString();
             Assert.Equal(expectedText, normalized);
         }
 
         private void VerifySyntaxRaw<TSyntax>(SyntaxNode node, string expectedText) where TSyntax : SyntaxNode
         {
-            Assert.IsAssignableFrom(typeof(TSyntax), node);
+            Assert.IsAssignableFrom<TSyntax>(node);
             var normalized = node.ToFullString();
             Assert.Equal(expectedText, normalized);
         }
@@ -217,6 +217,11 @@ public class MyAttribute : Attribute { public MyAttribute(int[] values) { } }",
 public class MyAttribute : Attribute { public int Value {get; set;} }",
 @"[MyAttribute(Value = 123)]")),
 @"[global::MyAttribute(Value = 123)]");
+
+            var attributes = Generator.GetAttributes(Generator.AddAttributes(
+                Generator.NamespaceDeclaration("n"),
+                Generator.Attribute("Attr")));
+            Assert.True(attributes.Count == 1);
         }
 
         private AttributeData GetAttributeData(string decl, string use)
@@ -1875,7 +1880,7 @@ public class C
             var cls = cu.Members[0];
             var summary = cls.DescendantNodes(descendIntoTrivia: true).OfType<XmlElementSyntax>().First();
 
-            var summary2 = summary.WithContent(default(SyntaxList<XmlNodeSyntax>));
+            var summary2 = summary.WithContent(default);
 
             var newCu = Generator.ReplaceNode(cu, summary, summary2);
 
@@ -2083,7 +2088,7 @@ public class C
         }
 
         [Fact]
-        public void TestWithAccessibilty()
+        public void TestWithAccessibility()
         {
             Assert.Equal(Accessibility.Private, Generator.GetAccessibility(Generator.WithAccessibility(Generator.ClassDeclaration("c", accessibility: Accessibility.Internal), Accessibility.Private)));
             Assert.Equal(Accessibility.Private, Generator.GetAccessibility(Generator.WithAccessibility(Generator.StructDeclaration("s", accessibility: Accessibility.Internal), Accessibility.Private)));

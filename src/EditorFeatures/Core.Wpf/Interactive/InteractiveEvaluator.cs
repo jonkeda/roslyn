@@ -11,7 +11,6 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
-using System.Windows;
 using Microsoft.CodeAnalysis.Editor.Implementation.Interactive;
 using Microsoft.CodeAnalysis.Editor.Shared.Utilities;
 using Microsoft.CodeAnalysis.ErrorReporting;
@@ -134,21 +133,15 @@ namespace Microsoft.CodeAnalysis.Editor.Interactive
 
             set
             {
-                if (value == null)
-                {
-                    throw new ArgumentNullException();
-                }
-
                 if (_currentWindow != null)
                 {
                     throw new NotSupportedException(InteractiveEditorFeaturesResources.The_CurrentWindow_property_may_only_be_assigned_once);
                 }
 
-                _currentWindow = value;
+                _currentWindow = value ?? throw new ArgumentNullException();
                 _workspace.Window = value;
 
-                _interactiveHost.SetOutput(_currentWindow.OutputWriter);
-                _interactiveHost.SetErrorOutput(_currentWindow.ErrorOutputWriter);
+                Task.Run(() => _interactiveHost.SetOutputs(_currentWindow.OutputWriter, _currentWindow.ErrorOutputWriter));
 
                 _currentWindow.SubmissionBufferAdded += SubmissionBufferAdded;
                 _interactiveCommands = _commandsFactory.CreateInteractiveCommands(_currentWindow, CommandPrefix, _commands);
@@ -397,7 +390,7 @@ namespace Microsoft.CodeAnalysis.Editor.Interactive
 
         private Project CreateSubmissionProject(Solution solution, string languageName, ImmutableArray<string> imports, ImmutableArray<MetadataReference> references)
         {
-            var name = "Submission#" + (_submissionCount++);
+            var name = "Submission#" + _submissionCount++;
 
             // Grab a local copy so we aren't closing over the field that might change. The
             // collection itself is an immutable collection.
@@ -460,8 +453,7 @@ namespace Microsoft.CodeAnalysis.Editor.Interactive
             var window = GetCurrentWindowOrThrow();
             var resetOptions = ResetOptions;
 
-            _interactiveHost.SetOutput(window.OutputWriter);
-            _interactiveHost.SetErrorOutput(window.ErrorOutputWriter);
+            _interactiveHost.SetOutputs(window.OutputWriter, window.ErrorOutputWriter);
 
             return ResetAsyncWorker(GetHostOptions(initialize: true, resetOptions.Is64Bit));
         }

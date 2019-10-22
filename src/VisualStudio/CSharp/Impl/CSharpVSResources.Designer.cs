@@ -169,6 +169,15 @@ namespace Microsoft.VisualStudio.LanguageServices.CSharp {
         }
         
         /// <summary>
+        ///   Looks up a localized string similar to C# Language Server Client.
+        /// </summary>
+        internal static string CSharp_language_server_client {
+            get {
+                return ResourceManager.GetString("CSharp_language_server_client", resourceCulture);
+            }
+        }
+        
+        /// <summary>
         ///   Looks up a localized string similar to Discard.
         /// </summary>
         internal static string Discard {
@@ -264,6 +273,15 @@ namespace Microsoft.VisualStudio.LanguageServices.CSharp {
         internal static string Format_document_settings {
             get {
                 return ResourceManager.GetString("Format_document_settings", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to General.
+        /// </summary>
+        internal static string General {
+            get {
+                return ResourceManager.GetString("General", resourceCulture);
             }
         }
         
@@ -1065,6 +1083,15 @@ namespace Microsoft.VisualStudio.LanguageServices.CSharp {
         internal static string Prefer_pattern_matching_over_is_with_cast_check {
             get {
                 return ResourceManager.GetString("Prefer_pattern_matching_over_is_with_cast_check", resourceCulture);
+            }
+        }
+        
+        /// <summary>
+        ///   Looks up a localized string similar to Prefer switch expression.
+        /// </summary>
+        internal static string Prefer_switch_expression {
+            get {
+                return ResourceManager.GetString("Prefer_switch_expression", resourceCulture);
             }
         }
         

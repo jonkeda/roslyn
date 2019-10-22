@@ -13,9 +13,7 @@ using System.Windows.Controls;
 using System.Windows.Forms;
 using System.Windows.Media;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Editor;
 using Microsoft.CodeAnalysis.Editor.Implementation.Highlighting;
-using Microsoft.CodeAnalysis.Editor.Implementation.IntelliSense.Completion;
 using Microsoft.CodeAnalysis.Editor.Options;
 using Microsoft.CodeAnalysis.Editor.Shared.Extensions;
 using Microsoft.CodeAnalysis.Options;
@@ -23,7 +21,6 @@ using Microsoft.VisualStudio.IntegrationTest.Utilities.Common;
 using Microsoft.VisualStudio.IntegrationTest.Utilities.Input;
 using Microsoft.VisualStudio.Language.Intellisense;
 using Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion;
-using Microsoft.VisualStudio.LanguageServices;
 using Microsoft.VisualStudio.Shell.Interop;
 using Microsoft.VisualStudio.Text;
 using Microsoft.VisualStudio.Text.Classification;
@@ -31,6 +28,7 @@ using Microsoft.VisualStudio.Text.Editor;
 using Microsoft.VisualStudio.Text.Outlining;
 using Microsoft.VisualStudio.Text.Tagging;
 using Microsoft.VisualStudio.TextManager.Interop;
+using Microsoft.VisualStudio.Utilities;
 using UIAutomationClient;
 using AutomationElementIdentifiers = System.Windows.Automation.AutomationElementIdentifiers;
 using ControlType = System.Windows.Automation.ControlType;
@@ -52,66 +50,76 @@ namespace Microsoft.VisualStudio.IntegrationTest.Utilities.InProcess
         public static Editor_InProc Create()
             => new Editor_InProc();
 
+        protected override bool HasActiveTextView()
+            => ErrorHandler.Succeeded(TryGetActiveTextViewHost().hr);
+
         protected override IWpfTextView GetActiveTextView()
             => GetActiveTextViewHost().TextView;
 
         private static IVsTextView GetActiveVsTextView()
         {
+            var (textView, hr) = TryGetActiveVsTextView();
+            Marshal.ThrowExceptionForHR(hr);
+            return textView;
+        }
+
+        private static (IVsTextView textView, int hr) TryGetActiveVsTextView()
+        {
             var vsTextManager = GetGlobalService<SVsTextManager, IVsTextManager>();
-
             var hresult = vsTextManager.GetActiveView(fMustHaveFocus: 1, pBuffer: null, ppView: out var vsTextView);
-            Marshal.ThrowExceptionForHR(hresult);
-
-            return vsTextView;
+            return (vsTextView, hresult);
         }
 
         private static IWpfTextViewHost GetActiveTextViewHost()
+        {
+            var (textViewHost, hr) = TryGetActiveTextViewHost();
+            Marshal.ThrowExceptionForHR(hr);
+            return textViewHost;
+        }
+
+        private static (IWpfTextViewHost textViewHost, int hr) TryGetActiveTextViewHost()
         {
             // The active text view might not have finished composing yet, waiting for the application to 'idle'
             // means that it is done pumping messages (including WM_PAINT) and the window should return the correct text view
             WaitForApplicationIdle(Helper.HangMitigatingTimeout);
 
-            var activeVsTextView = (IVsUserData)GetActiveVsTextView();
+            var (activeVsTextView, hr) = TryGetActiveVsTextView();
+            if (!ErrorHandler.Succeeded(hr))
+            {
+                return (null, hr);
+            }
 
-            var hresult = activeVsTextView.GetData(IWpfTextViewId, out var wpfTextViewHost);
-            Marshal.ThrowExceptionForHR(hresult);
-
-            return (IWpfTextViewHost)wpfTextViewHost;
+            var hresult = ((IVsUserData)activeVsTextView).GetData(IWpfTextViewId, out var wpfTextViewHost);
+            return ((IWpfTextViewHost)wpfTextViewHost, hresult);
         }
 
         public bool IsUseSuggestionModeOn()
         {
-            var asyncCompletionService = (AsyncCompletionService)GetComponentModelService<IAsyncCompletionService>();
             return ExecuteOnActiveView(textView =>
             {
+                var featureServiceFactory = GetComponentModelService<IFeatureServiceFactory>();
                 var subjectBuffer = GetBufferContainingCaret(textView);
-                if (asyncCompletionService.GetTestAccessor().UseLegacyCompletion(textView, subjectBuffer))
+
+                var options = textView.Options.GlobalOptions;
+                EditorOptionKey<bool> optionKey;
+                Option<bool> roslynOption;
+                if (IsDebuggerTextView(textView))
                 {
-                    return GetComponentModelService<VisualStudioWorkspace>().Options.GetOption(EditorCompletionOptions.UseSuggestionMode);
+                    optionKey = new EditorOptionKey<bool>(PredefinedCompletionNames.SuggestionModeInDebuggerCompletionOptionName);
+                    roslynOption = EditorCompletionOptions.UseSuggestionMode_Debugger;
                 }
                 else
                 {
-                    var options = textView.Options.GlobalOptions;
-                    EditorOptionKey<bool> optionKey;
-                    Option<bool> roslynOption;
-                    if (IsDebuggerTextView(textView))
-                    {
-                        optionKey = new EditorOptionKey<bool>(PredefinedCompletionNames.SuggestionModeInDebuggerCompletionOptionName);
-                        roslynOption = EditorCompletionOptions.UseSuggestionMode_Debugger;
-                    }
-                    else
-                    {
-                        optionKey = new EditorOptionKey<bool>(PredefinedCompletionNames.SuggestionModeInCompletionOptionName);
-                        roslynOption = EditorCompletionOptions.UseSuggestionMode;
-                    }
-
-                    if (!options.IsOptionDefined(optionKey, localScopeOnly: false))
-                    {
-                        return roslynOption.DefaultValue;
-                    }
-
-                    return options.GetOptionValue(optionKey);
+                    optionKey = new EditorOptionKey<bool>(PredefinedCompletionNames.SuggestionModeInCompletionOptionName);
+                    roslynOption = EditorCompletionOptions.UseSuggestionMode;
                 }
+
+                if (!options.IsOptionDefined(optionKey, localScopeOnly: false))
+                {
+                    return roslynOption.DefaultValue;
+                }
+
+                return options.GetOptionValue(optionKey);
             });
 
             bool IsDebuggerTextView(IWpfTextView textView)
@@ -702,7 +710,13 @@ namespace Microsoft.VisualStudio.IntegrationTest.Utilities.InProcess
 
         protected override ITextBuffer GetBufferContainingCaret(IWpfTextView view)
         {
-            return view.GetBufferContainingCaret();
+            var caretBuffer = view.GetBufferContainingCaret();
+            if (caretBuffer is null)
+            {
+                throw new InvalidOperationException($"Unable to find the buffer containing the caret. Ensure the Editor is activated berfore calling.");
+            }
+
+            return caretBuffer;
         }
 
         public string[] GetOutliningSpans()

@@ -27,7 +27,7 @@ namespace Microsoft.CodeAnalysis.Rename.ConflictEngine
             var potentiallyConfictingProperties =
                 renamedProperty.ContainingType.GetMembers(renamedProperty.Name)
                                             .OfType<IPropertySymbol>()
-                                            .Where(m => !m.Equals(renamedProperty) && m.Parameters.Count() == renamedProperty.Parameters.Count());
+                                            .Where(m => !m.Equals(renamedProperty) && m.Parameters.Length == renamedProperty.Parameters.Length);
 
             return GetConflictLocations(renamedProperty, potentiallyConfictingProperties, isMethod: false,
                 (property) => GetAllSignatures((property as IPropertySymbol).Parameters, trimOptionalParameters));
@@ -58,8 +58,8 @@ namespace Microsoft.CodeAnalysis.Rename.ConflictEngine
                     {
                         var conflictingMethod = conflictingSymbol as IMethodSymbol;
                         var renamedMethod = renamedMember as IMethodSymbol;
-                        if (!(conflictingMethod.PartialDefinitionPart != null && conflictingMethod.PartialDefinitionPart == renamedMethod) &&
-                            !(conflictingMethod.PartialImplementationPart != null && conflictingMethod.PartialImplementationPart == renamedMethod))
+                        if (!(conflictingMethod.PartialDefinitionPart != null && Equals(conflictingMethod.PartialDefinitionPart, renamedMethod)) &&
+                            !(conflictingMethod.PartialImplementationPart != null && Equals(conflictingMethod.PartialImplementationPart, renamedMethod)))
                         {
                             builder.AddRange(conflictingSymbol.Locations);
                         }

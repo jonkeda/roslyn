@@ -9,7 +9,6 @@ Imports Microsoft.CodeAnalysis
 Imports Microsoft.CodeAnalysis.Editor.Shared.Utilities
 Imports Microsoft.CodeAnalysis.Editor.UnitTests
 Imports Microsoft.CodeAnalysis.FindSymbols
-Imports Microsoft.CodeAnalysis.Shared.TestHooks
 Imports Microsoft.CodeAnalysis.Test.Utilities
 Imports Microsoft.VisualStudio.ComponentModelHost
 Imports Microsoft.VisualStudio.Composition
@@ -24,6 +23,7 @@ Imports Microsoft.VisualStudio.Shell.Interop
 Imports Moq
 Imports Microsoft.VisualStudio.LanguageServices.Implementation.TaskList
 Imports Microsoft.VisualStudio.LanguageServices.UnitTests.CodeModel
+Imports Microsoft.CodeAnalysis.Options
 
 Namespace Microsoft.VisualStudio.LanguageServices.UnitTests.ProjectSystemShim.Framework
 
@@ -34,7 +34,7 @@ Namespace Microsoft.VisualStudio.LanguageServices.UnitTests.ProjectSystemShim.Fr
     Friend Class TestEnvironment
         Implements IDisposable
 
-        Private Shared ReadOnly s_exportProviderFactory As Lazy(Of IExportProviderFactory) = New Lazy(Of IExportProviderFactory)(
+        Friend Shared ReadOnly s_exportCatalog As Lazy(Of ComposableCatalog) = New Lazy(Of ComposableCatalog)(
             Function()
                 Dim catalog = TestExportProvider.EntireAssemblyCatalogWithCSharpAndVisualBasic
                 catalog = catalog.WithParts(GetType(FileChangeWatcherProvider),
@@ -47,15 +47,22 @@ Namespace Microsoft.VisualStudio.LanguageServices.UnitTests.ProjectSystemShim.Fr
                                             GetType(CPSProjectFactory),
                                             GetType(VisualStudioRuleSetManagerFactory),
                                             GetType(VsMetadataServiceFactory),
-                                            GetType(VisualStudioMetadataReferenceManagerFactory))
-                Return ExportProviderCache.GetOrCreateExportProviderFactory(catalog)
+                                            GetType(VisualStudioMetadataReferenceManagerFactory),
+                                            GetType(MockWorkspaceEventListenerProvider))
+
+                Return catalog
             End Function)
 
         Private ReadOnly _workspace As VisualStudioWorkspaceImpl
         Private ReadOnly _projectFilePaths As New List(Of String)
 
-        Public Sub New(Optional solutionIsFullyLoaded As Boolean = True)
-            ExportProvider = s_exportProviderFactory.Value.CreateExportProvider()
+        Public Sub New(Optional solutionIsFullyLoaded As Boolean = True, Optional exportProviderFactory As IExportProviderFactory = Nothing)
+
+            If exportProviderFactory Is Nothing Then
+                exportProviderFactory = ExportProviderCache.GetOrCreateExportProviderFactory(s_exportCatalog.Value)
+            End If
+
+            ExportProvider = exportProviderFactory.CreateExportProvider()
             _workspace = ExportProvider.GetExportedValue(Of VisualStudioWorkspaceImpl)
             ThreadingContext = ExportProvider.GetExportedValue(Of IThreadingContext)()
             Interop.WrapperPolicy.s_ComWrapperFactory = MockComWrapperFactory.Instance
@@ -79,7 +86,9 @@ Namespace Microsoft.VisualStudio.LanguageServices.UnitTests.ProjectSystemShim.Fr
 
             <ImportingConstructor>
             Public Sub New(exportProvider As Composition.ExportProvider)
-                MyBase.New(exportProvider, exportProvider.GetExportedValue(Of MockServiceProvider))
+                MyBase.New(exportProvider,
+                           exportProvider.GetExportedValue(Of MockServiceProvider),
+                           exportProvider.GetExportedValues(Of IDocumentOptionsProviderFactory))
             End Sub
 
             Public Overrides Sub DisplayReferencedSymbols(solution As Microsoft.CodeAnalysis.Solution, referencedSymbols As IEnumerable(Of ReferencedSymbol))
@@ -131,8 +140,8 @@ Namespace Microsoft.VisualStudio.LanguageServices.UnitTests.ProjectSystemShim.Fr
             Return result
         End Function
 
-        Public Function CreateHierarchy(projectName As String, projectBinPath As String, projectCapabilities As String) As IVsHierarchy
-            Return New MockHierarchy(projectName, CreateProjectFile(projectName), projectBinPath, projectCapabilities)
+        Public Function CreateHierarchy(projectName As String, projectBinPath As String, projectRefPath As String, projectCapabilities As String) As IVsHierarchy
+            Return New MockHierarchy(projectName, CreateProjectFile(projectName), projectBinPath, projectRefPath, projectCapabilities)
         End Function
 
         Public Function GetUpdatedCompilationOptionOfSingleProject() As CompilationOptions

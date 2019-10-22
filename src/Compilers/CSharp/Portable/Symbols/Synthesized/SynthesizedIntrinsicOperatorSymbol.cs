@@ -229,6 +229,12 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             }
         }
 
+        public override FlowAnalysisAnnotations ReturnTypeFlowAnalysisAnnotations => FlowAnalysisAnnotations.None;
+
+        public override ImmutableHashSet<string> ReturnNotNullIfParameterNotNull => ImmutableHashSet<string>.Empty;
+
+        public override FlowAnalysisAnnotations FlowAnalysisAnnotations => FlowAnalysisAnnotations.None;
+
         public override ImmutableArray<TypeWithAnnotations> TypeArgumentsWithAnnotations
         {
             get
@@ -261,7 +267,8 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             }
         }
 
-        internal override bool IsDeclaredReadOnly => true;
+        // operators are never 'readonly' because there is no 'this' parameter
+        internal override bool IsDeclaredReadOnly => false;
 
         public override ImmutableArray<CustomModifier> RefCustomModifiers
         {
@@ -401,7 +408,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             throw ExceptionUtilities.Unreachable;
         }
 
-        public override bool Equals(object obj)
+        public override bool Equals(Symbol obj, TypeCompareKind compareKind)
         {
             if (obj == (object)this)
             {
@@ -418,12 +425,12 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             if (_isCheckedBuiltin == other._isCheckedBuiltin &&
                 _parameters.Length == other._parameters.Length &&
                 string.Equals(_name, other._name, StringComparison.Ordinal) &&
-                TypeSymbol.Equals(_containingType, other._containingType, TypeCompareKind.ConsiderEverything2) &&
-                TypeSymbol.Equals(_returnType, other._returnType, TypeCompareKind.ConsiderEverything2))
+                TypeSymbol.Equals(_containingType, other._containingType, compareKind) &&
+                TypeSymbol.Equals(_returnType, other._returnType, compareKind))
             {
                 for (int i = 0; i < _parameters.Length; i++)
                 {
-                    if (!TypeSymbol.Equals(_parameters[i].Type, other._parameters[i].Type, TypeCompareKind.ConsiderEverything2))
+                    if (!TypeSymbol.Equals(_parameters[i].Type, other._parameters[i].Type, compareKind))
                     {
                         return false;
                     }
@@ -451,7 +458,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
             {
             }
 
-            public override bool Equals(object obj)
+            public override bool Equals(Symbol obj, TypeCompareKind compareKind)
             {
                 if (obj == (object)this)
                 {
@@ -465,7 +472,7 @@ namespace Microsoft.CodeAnalysis.CSharp.Symbols
                     return false;
                 }
 
-                return Ordinal == other.Ordinal && ContainingSymbol == other.ContainingSymbol;
+                return Ordinal == other.Ordinal && ContainingSymbol.Equals(other.ContainingSymbol, compareKind);
             }
 
             public override int GetHashCode()

@@ -44,14 +44,25 @@ namespace Microsoft.CodeAnalysis.Interactive
         private readonly object _outputGuard;
         private readonly object _errorOutputGuard;
 
+        /// <remarks>
+        /// Test only setting.
+        /// True to join output writing threads when the host is being disposed.
+        /// We have to join the threads before each test is finished, otherwise xunit won't be able to unload the AppDomain.
+        /// WARNING: Joining the threads might deadlock if <see cref="Dispose()"/> is executing on the UI thread, 
+        /// since the threads are dispatching to UI thread to write the output to the editor buffer.
+        /// </remarks>
+        private readonly bool _joinOutputWritingThreadsOnDisposal;
+
         internal event Action<bool> ProcessStarting;
 
         public InteractiveHost(
             Type replServiceProviderType,
             string workingDirectory,
-            int millisecondsTimeout = 5000)
+            int millisecondsTimeout = 5000,
+            bool joinOutputWritingThreadsOnDisposal = false)
         {
             _millisecondsTimeout = millisecondsTimeout;
+            _joinOutputWritingThreadsOnDisposal = joinOutputWritingThreadsOnDisposal;
             _output = TextWriter.Null;
             _errorOutput = TextWriter.Null;
             _replServiceProviderType = replServiceProviderType;
@@ -79,7 +90,7 @@ namespace Microsoft.CodeAnalysis.Interactive
 
         internal Service TryGetService()
         {
-            var initializedService = TryGetOrCreateRemoteServiceAsync(processPendingOutput: false).Result;
+            var initializedService = TryGetOrCreateRemoteServiceAsync().Result;
             return initializedService.ServiceOpt?.Service;
         }
 
@@ -170,11 +181,7 @@ namespace Microsoft.CodeAnalysis.Interactive
                         return null;
                     }
 
-                    lock (_outputGuard)
-                    {
-                        _output.WriteLine(InteractiveHostResources.Attempt_to_connect_to_process_Sharp_0_failed_retrying, newProcessId);
-                    }
-
+                    WriteOutputInBackground(isError: false, string.Format(InteractiveHostResources.Attempt_to_connect_to_process_Sharp_0_failed_retrying, newProcessId));
                     cancellationToken.ThrowIfCancellationRequested();
                 }
 
@@ -221,11 +228,11 @@ namespace Microsoft.CodeAnalysis.Interactive
             if (!alive)
             {
                 string errorString = process.StandardError.ReadToEnd();
-                lock (_errorOutputGuard)
-                {
-                    _errorOutput.WriteLine(InteractiveHostResources.Failed_to_launch_0_process_exit_code_colon_1_with_output_colon, hostPath, process.ExitCode);
-                    _errorOutput.WriteLine(errorString);
-                }
+
+                WriteOutputInBackground(
+                    isError: true,
+                    string.Format(InteractiveHostResources.Failed_to_launch_0_process_exit_code_colon_1_with_output_colon, hostPath, process.ExitCode),
+                    errorString);
             }
 
             return alive;
@@ -233,62 +240,57 @@ namespace Microsoft.CodeAnalysis.Interactive
 
         ~InteractiveHost()
         {
-            DisposeRemoteService(disposing: false);
+            DisposeRemoteService();
         }
 
         // Dispose may be called anytime.
         public void Dispose()
         {
             DisposeChannel();
-            SetOutput(TextWriter.Null);
-            SetErrorOutput(TextWriter.Null);
-            DisposeRemoteService(disposing: true);
+
+            // Run this in background to avoid deadlocking with UIThread operations performing with active outputs.
+            _ = Task.Run(() => SetOutputs(TextWriter.Null, TextWriter.Null));
+
+            DisposeRemoteService();
             GC.SuppressFinalize(this);
         }
 
-        private void DisposeRemoteService(bool disposing)
+        private void DisposeRemoteService()
         {
-            if (_lazyRemoteService != null)
-            {
-                _lazyRemoteService.Dispose(disposing);
-                _lazyRemoteService = null;
-            }
+            Interlocked.Exchange(ref _lazyRemoteService, null)?.Dispose();
         }
 
         private void DisposeChannel()
         {
-            if (_serverChannel != null)
+            var serverChannel = Interlocked.Exchange(ref _serverChannel, null);
+            if (serverChannel != null)
             {
-                ChannelServices.UnregisterChannel(_serverChannel);
-                _serverChannel = null;
+                ChannelServices.UnregisterChannel(serverChannel);
             }
         }
 
-        public void SetOutput(TextWriter value)
+        public void SetOutputs(TextWriter output, TextWriter errorOutput)
         {
-            if (value == null)
+            if (output == null)
             {
-                throw new ArgumentNullException(nameof(value));
+                throw new ArgumentNullException(nameof(output));
+            }
+
+            if (errorOutput == null)
+            {
+                throw new ArgumentNullException(nameof(errorOutput));
             }
 
             lock (_outputGuard)
             {
                 _output.Flush();
-                _output = value;
-            }
-        }
-
-        public void SetErrorOutput(TextWriter value)
-        {
-            if (value == null)
-            {
-                throw new ArgumentNullException(nameof(value));
+                _output = output;
             }
 
             lock (_errorOutputGuard)
             {
                 _errorOutput.Flush();
-                _errorOutput = value;
+                _errorOutput = errorOutput;
             }
         }
 
@@ -298,10 +300,33 @@ namespace Microsoft.CodeAnalysis.Interactive
 
             var writer = error ? _errorOutput : _output;
             var guard = error ? _errorOutputGuard : _outputGuard;
+
             lock (guard)
             {
                 writer.Write(buffer, 0, count);
             }
+        }
+
+        private void WriteOutputInBackground(bool isError, string firstLine, string secondLine = null)
+        {
+            var writer = isError ? _errorOutput : _output;
+            var guard = isError ? _errorOutputGuard : _outputGuard;
+
+            // We cannot guarantee that writers can perform writing synchronously 
+            // without deadlocks with other operations.
+            // This could happen, for example, for writers provided by the Interactive Window,
+            // and in the case where the window is being disposed.
+            Task.Run(() =>
+            {
+                lock (guard)
+                {
+                    writer.WriteLine(firstLine);
+                    if (secondLine != null)
+                    {
+                        writer.WriteLine(secondLine);
+                    }
+                }
+            });
         }
 
         private LazyRemoteService CreateRemoteService(InteractiveHostOptions options, bool skipInitialization)
@@ -312,7 +337,7 @@ namespace Microsoft.CodeAnalysis.Interactive
         private Task OnProcessExited(Process process)
         {
             ReportProcessExited(process);
-            return TryGetOrCreateRemoteServiceAsync(processPendingOutput: true);
+            return TryGetOrCreateRemoteServiceAsync();
         }
 
         private void ReportProcessExited(Process process)
@@ -329,14 +354,11 @@ namespace Microsoft.CodeAnalysis.Interactive
 
             if (exitCode.HasValue)
             {
-                lock (_errorOutputGuard)
-                {
-                    _errorOutput.WriteLine(InteractiveHostResources.Hosting_process_exited_with_exit_code_0, exitCode.Value);
-                }
+                WriteOutputInBackground(isError: true, string.Format(InteractiveHostResources.Hosting_process_exited_with_exit_code_0, exitCode.Value));
             }
         }
 
-        private async Task<InitializedRemoteService> TryGetOrCreateRemoteServiceAsync(bool processPendingOutput)
+        private async Task<InitializedRemoteService> TryGetOrCreateRemoteServiceAsync()
         {
             try
             {
@@ -363,21 +385,18 @@ namespace Microsoft.CodeAnalysis.Interactive
                     if (previousService == currentRemoteService)
                     {
                         // we replaced the service whose process we know is dead:
-                        currentRemoteService.Dispose(processPendingOutput);
+                        currentRemoteService.Dispose();
                         currentRemoteService = newService;
                     }
                     else
                     {
                         // the process was reset in between our checks, try to use the new service:
-                        newService.Dispose(joinThreads: false);
+                        newService.Dispose();
                         currentRemoteService = previousService;
                     }
                 }
 
-                lock (_errorOutputGuard)
-                {
-                    _errorOutput.WriteLine(InteractiveHostResources.Unable_to_create_hosting_process);
-                }
+                WriteOutputInBackground(isError: true, InteractiveHostResources.Unable_to_create_hosting_process);
             }
             catch (OperationCanceledException)
             {
@@ -389,17 +408,17 @@ namespace Microsoft.CodeAnalysis.Interactive
                 throw ExceptionUtilities.Unreachable;
             }
 
-            return default(InitializedRemoteService);
+            return default;
         }
 
         private async Task<TResult> Async<TResult>(Action<Service, RemoteAsyncOperation<TResult>> action)
         {
             try
             {
-                var initializedService = await TryGetOrCreateRemoteServiceAsync(processPendingOutput: false).ConfigureAwait(false);
+                var initializedService = await TryGetOrCreateRemoteServiceAsync().ConfigureAwait(false);
                 if (initializedService.ServiceOpt == null)
                 {
-                    return default(TResult);
+                    return default;
                 }
 
                 return await new RemoteAsyncOperation<TResult>(initializedService.ServiceOpt).AsyncExecute(action).ConfigureAwait(false);
@@ -443,10 +462,10 @@ namespace Microsoft.CodeAnalysis.Interactive
                 var oldService = Interlocked.Exchange(ref _lazyRemoteService, newService);
                 if (oldService != null)
                 {
-                    oldService.Dispose(joinThreads: false);
+                    oldService.Dispose();
                 }
 
-                var initializedService = await TryGetOrCreateRemoteServiceAsync(processPendingOutput: false).ConfigureAwait(false);
+                var initializedService = await TryGetOrCreateRemoteServiceAsync().ConfigureAwait(false);
                 if (initializedService.ServiceOpt == null)
                 {
                     return default;

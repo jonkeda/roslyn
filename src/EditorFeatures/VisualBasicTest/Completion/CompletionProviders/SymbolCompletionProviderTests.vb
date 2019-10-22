@@ -1,11 +1,13 @@
 ﻿' Copyright (c) Microsoft.  All Rights Reserved.  Licensed under the Apache License, Version 2.0.  See License.txt in the project root for license information.
 
 Imports Microsoft.CodeAnalysis.Completion
+Imports Microsoft.CodeAnalysis.Editor.Implementation.IntelliSense.AsyncCompletion
 Imports Microsoft.CodeAnalysis.Editor.UnitTests
 Imports Microsoft.CodeAnalysis.Editor.UnitTests.Workspaces
 Imports Microsoft.CodeAnalysis.Experiments
 Imports Microsoft.CodeAnalysis.VisualBasic.Completion.Providers
 Imports Microsoft.VisualStudio.Composition
+Imports Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion.Data
 
 Namespace Microsoft.CodeAnalysis.Editor.VisualBasic.UnitTests.Completion.CompletionProviders
     <UseExportProvider>
@@ -8169,6 +8171,64 @@ End Module
             Await VerifyItemIsAbsentAsync(source, "Target")
         End Function
 
+        <WorkItem(36029, "https://github.com/dotnet/roslyn/issues/36029")>
+        <Fact, Trait(Traits.Feature, Traits.Features.TargetTypedCompletion)>
+        Public Async Function CompletionInsideMethodWithParamsBeforeParams() As Task
+            Dim source =
+<code><![CDATA[
+Imports System
+Class C
+    Sub M()
+        Goo(Sub(b) b.$$)
+    End Sub
+
+    Sub Goo(action As Action(Of Builder), ParamArray otherActions() As Action(Of AnotherBuilder))
+    End Sub
+End Class
+
+Class Builder
+    Public Something As Integer
+End Class
+
+Class AnotherBuilder
+    Public AnotherSomething As Integer
+End Class
+]]></code>.Value
+
+            Await VerifyItemIsAbsentAsync(source, "AnotherSomething")
+            Await VerifyItemIsAbsentAsync(source, "FirstOrDefault")
+            Await VerifyItemExistsAsync(source, "Something")
+        End Function
+
+        <WorkItem(36029, "https://github.com/dotnet/roslyn/issues/36029")>
+        <Fact, Trait(Traits.Feature, Traits.Features.TargetTypedCompletion)>
+        Public Async Function CompletionInsideMethodWithParamsInParams() As Task
+            Dim source =
+<code><![CDATA[
+Imports System
+Class C
+    Sub M()
+        Goo(Nothing, Nothing, Sub(b) b.$$)
+    End Sub
+
+    Sub Goo(action As Action(Of Builder), ParamArray otherActions() As Action(Of AnotherBuilder))
+    End Sub
+End Class
+
+Class Builder
+    Public Something As Integer
+End Class
+
+Class AnotherBuilder
+    Public AnotherSomething As Integer
+End Class
+]]></code>.Value
+
+            Await VerifyItemIsAbsentAsync(source, "Something")
+            Await VerifyItemIsAbsentAsync(source, "FirstOrDefault")
+            Await VerifyItemExistsAsync(source, "AnotherSomething")
+        End Function
+
         <Fact, Trait(Traits.Feature, Traits.Features.TargetTypedCompletion)>
         Public Async Function TestTargetTypeFilterWithExperimentEnabled() As Task
             SetExperimentOption(WellKnownExperimentNames.TargetTypedCompletionFilter, True)
@@ -8181,7 +8241,7 @@ End Module
 End Class"
             Await VerifyItemExistsAsync(
                 markup, "intField",
-                matchingFilters:=New List(Of CompletionItemFilter) From {CompletionItemFilter.FieldFilter, CompletionItemFilter.TargetTypedFilter})
+                matchingFilters:=New List(Of CompletionFilter) From {FilterSet.FieldFilter, FilterSet.TargetTypedFilter})
         End Function
 
         <Fact, Trait(Traits.Feature, Traits.Features.TargetTypedCompletion)>
@@ -8196,7 +8256,7 @@ End Class"
 End Class"
             Await VerifyItemExistsAsync(
                 markup, "intField",
-                matchingFilters:=New List(Of CompletionItemFilter) From {CompletionItemFilter.FieldFilter})
+                matchingFilters:=New List(Of CompletionFilter) From {FilterSet.FieldFilter})
         End Function
 
         <Fact, Trait(Traits.Feature, Traits.Features.TargetTypedCompletion)>
@@ -8211,7 +8271,7 @@ End Class"
 End Class"
             Await VerifyItemExistsAsync(
                 markup, "GetHashCode",
-                matchingFilters:=New List(Of CompletionItemFilter) From {CompletionItemFilter.MethodFilter})
+                matchingFilters:=New List(Of CompletionFilter) From {FilterSet.MethodFilter})
         End Function
     End Class
 End Namespace

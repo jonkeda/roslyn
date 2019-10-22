@@ -155,9 +155,26 @@ namespace Microsoft.CodeAnalysis.CSharp.ExpressionEvaluator
             get { return _returnType; }
         }
 
+        public override FlowAnalysisAnnotations ReturnTypeFlowAnalysisAnnotations => FlowAnalysisAnnotations.None;
+
+        public override ImmutableHashSet<string> ReturnNotNullIfParameterNotNull => ImmutableHashSet<string>.Empty;
+
+        public override FlowAnalysisAnnotations FlowAnalysisAnnotations => FlowAnalysisAnnotations.None;
+
         bool Cci.ISignature.ReturnValueIsByRef
         {
             get { return true; }
+        }
+
+        // This should be inherited from the base class implementation, but it does not currently work with Nullable
+        // Reference Types.
+        // https://github.com/dotnet/roslyn/issues/39167
+        ImmutableArray<Cci.ICustomModifier> Cci.ISignature.RefCustomModifiers
+        {
+            get
+            {
+                return this.RefCustomModifiers.As<Cci.ICustomModifier>();
+            }
         }
 
         public override ImmutableArray<CustomModifier> RefCustomModifiers

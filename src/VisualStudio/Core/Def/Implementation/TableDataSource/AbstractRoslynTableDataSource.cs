@@ -9,7 +9,8 @@ namespace Microsoft.VisualStudio.LanguageServices.Implementation.TableDataSource
     /// <summary>
     /// A version of ITableDataSource who knows how to connect them to Roslyn solution crawler for live information.
     /// </summary>
-    internal abstract class AbstractRoslynTableDataSource<TData> : AbstractTableDataSource<TData>
+    internal abstract class AbstractRoslynTableDataSource<TItem> : AbstractTableDataSource<TItem>
+        where TItem : TableItem
     {
         public AbstractRoslynTableDataSource(Workspace workspace) : base(workspace)
         {
@@ -50,7 +51,7 @@ namespace Microsoft.VisualStudio.LanguageServices.Implementation.TableDataSource
                 case ProgressStatus.Started:
                     SolutionCrawlerProgressChanged(running: true);
                     break;
-                case ProgressStatus.Stoped:
+                case ProgressStatus.Stopped:
                     SolutionCrawlerProgressChanged(running: false);
                     break;
             }

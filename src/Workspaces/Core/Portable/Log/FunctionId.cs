@@ -61,6 +61,9 @@ namespace Microsoft.CodeAnalysis.Internal.Log
         CommandHandler_GetCommandState,
         CommandHandler_ExecuteHandlers,
         CommandHandler_FormatCommand,
+        CommandHandler_CompleteStatement,
+        CommandHandler_ToggleBlockComment,
+        CommandHandler_ToggleLineComment,
 
         Workspace_SourceText_GetChangeRanges,
         Workspace_Recoverable_RecoverRootAsync,
@@ -404,7 +407,7 @@ namespace Microsoft.CodeAnalysis.Internal.Log
         CompilationService_GetCompilationAsync,
         SolutionCreator_AssetDifferences,
         Extension_InfoBar,
-        Experiment_ABTesting,
+        FxCopAnalyzersInstall,
         AssetStorage_ForceGC,
         RemoteHost_Bitness,
         Intellisense_Completion,
@@ -454,5 +457,14 @@ namespace Microsoft.CodeAnalysis.Internal.Log
         GraphQuery_Overrides,
 
         Intellisense_AsyncCompletion_Data,
+        Intellisense_CompletionProviders_Data,
+        SnapshotService_IsExperimentEnabledAsync,
+        PartialLoad_FullyLoaded,
+        Liveshare_UnknownCodeAction,
+        Liveshare_LexicalClassifications,
+        Liveshare_SyntacticClassifications,
+        Liveshare_SyntacticTagger,
+
+        CommandHandler_GoToBase,
     }
 }

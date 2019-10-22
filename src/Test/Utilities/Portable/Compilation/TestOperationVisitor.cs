@@ -84,6 +84,7 @@ namespace Microsoft.CodeAnalysis.Test.Utilities
         public override void VisitVariableDeclarationGroup(IVariableDeclarationGroupOperation operation)
         {
             Assert.Equal(OperationKind.VariableDeclarationGroup, operation.Kind);
+            Assert.IsType(typeof(VariableDeclarationKind), operation.DeclarationKind);
             AssertEx.Equal(operation.Declarations, operation.Children);
         }
 
@@ -1151,7 +1152,7 @@ namespace Microsoft.CodeAnalysis.Test.Utilities
             Assert.Empty(operation.Children);
         }
 
-        internal override void VisitRecursivePattern(IRecursivePatternOperation operation)
+        public override void VisitRecursivePattern(IRecursivePatternOperation operation)
         {
             Assert.Equal(OperationKind.RecursivePattern, operation.Kind);
             VisitPatternCommon(operation);
@@ -1195,7 +1196,7 @@ namespace Microsoft.CodeAnalysis.Test.Utilities
             AssertEx.Equal(children, operation.Children);
         }
 
-        internal override void VisitPropertySubpattern(IPropertySubpatternOperation operation)
+        public override void VisitPropertySubpattern(IPropertySubpatternOperation operation)
         {
             Assert.NotNull(operation.Pattern);
             var children = new IOperation[] { operation.Member, operation.Pattern };

@@ -11,6 +11,7 @@ using Microsoft.CodeAnalysis.AddImports;
 using Microsoft.CodeAnalysis.Editing;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.Formatting;
+using Microsoft.CodeAnalysis.Host;
 using Microsoft.CodeAnalysis.LanguageServices;
 using Microsoft.CodeAnalysis.PooledObjects;
 using Microsoft.CodeAnalysis.RemoveUnnecessaryImports;
@@ -84,6 +85,9 @@ namespace Microsoft.CodeAnalysis.ChangeNamespace
 
         private static bool IsValidContainer(SyntaxNode container)
             => container is TCompilationUnitSyntax || container is TNamespaceDeclarationSyntax;
+
+        protected static bool IsGlobalNamespace(ImmutableArray<string> parts)
+            => parts.Length == 1 && parts[0].Length == 0;
 
         public override async Task<bool> CanChangeNamespaceAsync(Document document, SyntaxNode container, CancellationToken cancellationToken)
         {
@@ -187,7 +191,10 @@ namespace Microsoft.CodeAnalysis.ChangeNamespace
                     ImmutableArray.Create(declaredNamespace, targetNamespace),
                     cancellationToken).ConfigureAwait(false);
 
-                return await MergeDiffAsync(solutionAfterFirstMerge, solutionAfterImportsRemoved, cancellationToken).ConfigureAwait(false);
+                var mergedSolution = await MergeDiffAsync(solutionAfterFirstMerge, solutionAfterImportsRemoved, cancellationToken).ConfigureAwait(false);
+                (_, mergedSolution) = await mergedSolution.ExcludeDisallowedDocumentTextChangesAsync(solution, cancellationToken).ConfigureAwait(false);
+
+                return mergedSolution;
             }
             finally
             {
@@ -207,40 +214,32 @@ namespace Microsoft.CodeAnalysis.ChangeNamespace
             // will return false. We use span of namespace declaration found in each document to decide if they are identical.            
 
             var documents = ids.SelectAsArray(id => solution.GetDocument(id));
-            var containers = ArrayBuilder<(DocumentId, SyntaxNode)>.GetInstance(ids.Length);
-            var spanForContainers = PooledHashSet<TextSpan>.GetInstance();
+            using var containersDisposer = ArrayBuilder<(DocumentId, SyntaxNode)>.GetInstance(ids.Length, out var containers);
+            using var spanForContainersDisposer = PooledHashSet<TextSpan>.GetInstance(out var spanForContainers);
 
-            try
+            foreach (var document in documents)
             {
-                foreach (var document in documents)
+                var container = await TryGetApplicableContainerFromSpanAsync(document, span, cancellationToken).ConfigureAwait(false);
+
+                if (container is TNamespaceDeclarationSyntax)
                 {
-                    var container = await TryGetApplicableContainerFromSpanAsync(document, span, cancellationToken).ConfigureAwait(false);
-
-                    if (container is TNamespaceDeclarationSyntax)
-                    {
-                        spanForContainers.Add(container.Span);
-                    }
-                    else if (container is TCompilationUnitSyntax)
-                    {
-                        // In case there's no namespace declaration in the document, we used an empty span as key, 
-                        // since a valid namespace declaration node can't have zero length.
-                        spanForContainers.Add(default);
-                    }
-                    else
-                    {
-                        return default;
-                    }
-
-                    containers.Add((document.Id, container));
+                    spanForContainers.Add(container.Span);
+                }
+                else if (container is TCompilationUnitSyntax)
+                {
+                    // In case there's no namespace declaration in the document, we used an empty span as key, 
+                    // since a valid namespace declaration node can't have zero length.
+                    spanForContainers.Add(default);
+                }
+                else
+                {
+                    return default;
                 }
 
-                return spanForContainers.Count == 1 ? containers.ToImmutable() : default;
+                containers.Add((document.Id, container));
             }
-            finally
-            {
-                containers.Free();
-                spanForContainers.Free();
-            }
+
+            return spanForContainers.Count == 1 ? containers.ToImmutable() : default;
         }
 
         /// <summary>
@@ -341,13 +340,13 @@ namespace Microsoft.CodeAnalysis.ChangeNamespace
         private ImmutableArray<SyntaxNode> CreateImports(Document document, ImmutableArray<string> names, bool withFormatterAnnotation)
         {
             var generator = SyntaxGenerator.GetGenerator(document);
-            var builder = ArrayBuilder<SyntaxNode>.GetInstance(names.Length);
+            using var builderDisposer = ArrayBuilder<SyntaxNode>.GetInstance(names.Length, out var builder);
             for (var i = 0; i < names.Length; ++i)
             {
                 builder.Add(CreateImport(generator, names[i], withFormatterAnnotation));
             }
 
-            return builder.ToImmutableAndFree();
+            return builder.ToImmutable();
         }
 
         private static SyntaxNode CreateImport(SyntaxGenerator syntaxGenerator, string name, bool withFormatterAnnotation)
@@ -383,7 +382,7 @@ namespace Microsoft.CodeAnalysis.ChangeNamespace
 
             var editor = await DocumentEditor.CreateAsync(document, cancellationToken).ConfigureAwait(false);
 
-            // Separating references to declaredSymbols into two groups based on wheter it's located in the same 
+            // Separating references to declaredSymbols into two groups based on whether it's located in the same 
             // document as the namespace declaration. This is because code change required for them are different.
             var refLocationsInCurrentDocument = new List<LocationForAffectedSymbol>();
             var refLocationsInOtherDocuments = new List<LocationForAffectedSymbol>();
@@ -588,6 +587,13 @@ namespace Microsoft.CodeAnalysis.ChangeNamespace
             string newNamespace,
             CancellationToken cancellationToken)
         {
+            // Can't apply change to certain document, simply return unchanged.
+            // e.g. Razor document (*.g.cs file, not *.cshtml)
+            if (!document.CanApplyChange())
+            {
+                return document;
+            }
+
             // 1. Fully qualify all simple references (i.e. not via an alias) with new namespace.
             // 2. Add using of new namespace (for each reference's container).
             // 3. Try to simplify qualified names introduced from step(1).
@@ -783,7 +789,7 @@ namespace Microsoft.CodeAnalysis.ChangeNamespace
 
                 var compilation = await document.Project.GetCompilationAsync(cancellationToken).ConfigureAwait(false);
                 var root = await document.GetSyntaxRootAsync(cancellationToken).ConfigureAwait(false);
-                root = addImportService.AddImports(compilation, root, contextLocation, imports, placeSystemNamespaceFirst);
+                root = addImportService.AddImports(compilation, root, contextLocation, imports, placeSystemNamespaceFirst, cancellationToken);
                 document = document.WithSyntaxRoot(root);
             }
 

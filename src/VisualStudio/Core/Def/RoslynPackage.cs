@@ -7,11 +7,11 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Editor;
-using Microsoft.CodeAnalysis.Editor.Implementation.IntelliSense.AsyncCompletion;
+using Microsoft.CodeAnalysis.Completion.Log;
 using Microsoft.CodeAnalysis.Editor.Shared.Utilities;
 using Microsoft.CodeAnalysis.ErrorReporting;
 using Microsoft.CodeAnalysis.Experiments;
+using Microsoft.CodeAnalysis.Internal.Log;
 using Microsoft.CodeAnalysis.Logging;
 using Microsoft.CodeAnalysis.Notification;
 using Microsoft.CodeAnalysis.Options;
@@ -38,7 +38,7 @@ namespace Microsoft.VisualStudio.LanguageServices.Setup
 {
     [Guid(Guids.RoslynPackageIdString)]
     [PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
-    [ProvideMenuResource("Menus.ctmenu", version: 16)]
+    [ProvideMenuResource("Menus.ctmenu", version: 17)]
     internal class RoslynPackage : AbstractPackage
     {
         private VisualStudioWorkspace _workspace;
@@ -114,8 +114,6 @@ namespace Microsoft.VisualStudio.LanguageServices.Setup
             // we need to load it as early as possible since we can have errors from
             // package from each language very early
             this.ComponentModel.GetService<TaskCenterSolutionAnalysisProgressReporter>();
-            this.ComponentModel.GetService<VisualStudioDiagnosticListTable>();
-            this.ComponentModel.GetService<VisualStudioTodoListTable>();
             this.ComponentModel.GetService<VisualStudioDiagnosticListTableCommandHandler>().Initialize(this);
 
             this.ComponentModel.GetService<VisualStudioMetadataAsSourceFileSupportService>();
@@ -124,6 +122,10 @@ namespace Microsoft.VisualStudio.LanguageServices.Setup
             // The misc files workspace needs to be loaded on the UI thread.  This way it will have
             // the appropriate task scheduler to report events on.
             this.ComponentModel.GetService<MiscellaneousFilesWorkspace>();
+
+            // Load and initialize the services detecting and adding new analyzer config documents as solution item.
+            this.ComponentModel.GetService<AnalyzerConfigDocumentAsSolutionItemHandler>().Initialize(this);
+            this.ComponentModel.GetService<VisualStudioAddSolutionItemService>().Initialize(this);
 
             LoadAnalyzerNodeComponents();
 
@@ -134,13 +136,7 @@ namespace Microsoft.VisualStudio.LanguageServices.Setup
         {
             await TaskScheduler.Default;
 
-            // Perf: Initialize the command handlers.
-            var commandHandlerServiceFactory = this.ComponentModel.GetService<ICommandHandlerServiceFactory>();
-            commandHandlerServiceFactory.Initialize(ContentTypeNames.RoslynContentType);
             await LoadInteractiveMenusAsync(cancellationToken).ConfigureAwait(true);
-
-            this.ComponentModel.GetService<MiscellaneousTodoListTable>();
-            this.ComponentModel.GetService<MiscellaneousDiagnosticListTable>();
 
             // Initialize any experiments async
             var experiments = this.ComponentModel.DefaultExportProvider.GetExportedValues<IExperiment>();
@@ -162,11 +158,11 @@ namespace Microsoft.VisualStudio.LanguageServices.Setup
             await TaskScheduler.Default;
 
             await new CSharpResetInteractiveMenuCommand(menuCommandService, monitorSelectionService, ComponentModel)
-                .InitializeResetInteractiveFromProjectCommandAsync(cancellationToken)
+                .InitializeResetInteractiveFromProjectCommandAsync()
                 .ConfigureAwait(true);
 
             await new VisualBasicResetInteractiveMenuCommand(menuCommandService, monitorSelectionService, ComponentModel)
-                .InitializeResetInteractiveFromProjectCommandAsync(cancellationToken)
+                .InitializeResetInteractiveFromProjectCommandAsync()
                 .ConfigureAwait(true);
         }
 
@@ -202,6 +198,8 @@ namespace Microsoft.VisualStudio.LanguageServices.Setup
             LinkedFileDiffMergingLogger.ReportTelemetry();
             SolutionLogger.ReportTelemetry();
             AsyncCompletionLogger.ReportTelemetry();
+            CompletionProvidersLogger.ReportTelemetry();
+            SyntacticLspLogger.ReportTelemetry();
         }
 
         private void DisposeVisualStudioServices()
@@ -249,7 +247,7 @@ namespace Microsoft.VisualStudio.LanguageServices.Setup
 
             // BulkFileOperation can't have nested events. there will be ever only 1 events (Begin/End)
             // so we only need simple tracking.
-            object gate = new object();
+            var gate = new object();
             GlobalOperationRegistration localRegistration = null;
 
             BulkFileOperation.End += (s, a) =>

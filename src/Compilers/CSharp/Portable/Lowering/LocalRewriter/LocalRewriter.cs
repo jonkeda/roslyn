@@ -202,7 +202,10 @@ namespace Microsoft.CodeAnalysis.CSharp
                     visited.Type.Equals(node.Type, TypeCompareKind.IgnoreDynamicAndTupleNames | TypeCompareKind.IgnoreNullableModifiersForReferenceTypes) ||
                     IsUnusedDeconstruction(node));
 
-            if (visited != null && visited != node)
+            if (visited != null &&
+                visited != node &&
+                node.Kind != BoundKind.ImplicitReceiver &&
+                node.Kind != BoundKind.ObjectOrCollectionValuePlaceholder)
             {
                 if (!CanBePassedByReference(node) && CanBePassedByReference(visited))
                 {
@@ -248,31 +251,34 @@ namespace Microsoft.CodeAnalysis.CSharp
         public override BoundNode VisitLocalFunctionStatement(BoundLocalFunctionStatement node)
         {
             _sawLocalFunctions = true;
-            CheckRefReadOnlySymbols(node.Symbol);
 
-            var typeParameters = node.Symbol.TypeParameters;
+            var localFunction = node.Symbol;
+            CheckRefReadOnlySymbols(localFunction);
+
+            var typeParameters = localFunction.TypeParameters;
             if (typeParameters.Any(typeParameter => typeParameter.HasUnmanagedTypeConstraint))
             {
                 _factory.CompilationState.ModuleBuilderOpt?.EnsureIsUnmanagedAttributeExists();
             }
 
-            bool constraintsNeedNullableAttribute = typeParameters.Any(
-               typeParameter => (typeParameter.HasReferenceTypeConstraint && typeParameter.ReferenceTypeConstraintIsNullable != null) ||
-                                typeParameter.ConstraintTypesNoUseSiteDiagnostics.Any(
-                                    typeConstraint => typeConstraint.NeedsNullableAttribute()));
-
-            bool returnTypeNeedsNullableAttribute = node.Symbol.ReturnTypeWithAnnotations.NeedsNullableAttribute();
-            bool parametersNeedNullableAttribute = node.Symbol.ParameterTypesWithAnnotations.Any(parameter => parameter.NeedsNullableAttribute());
-
-            if (constraintsNeedNullableAttribute || returnTypeNeedsNullableAttribute || parametersNeedNullableAttribute)
+            if (_factory.CompilationState.Compilation.ShouldEmitNullableAttributes(localFunction))
             {
-                _factory.CompilationState.ModuleBuilderOpt?.EnsureNullableAttributeExists();
+                bool constraintsNeedNullableAttribute = typeParameters.Any(
+                   typeParameter => ((SourceTypeParameterSymbolBase)typeParameter).ConstraintsNeedNullableAttribute());
+
+                bool returnTypeNeedsNullableAttribute = localFunction.ReturnTypeWithAnnotations.NeedsNullableAttribute();
+                bool parametersNeedNullableAttribute = localFunction.ParameterTypesWithAnnotations.Any(parameter => parameter.NeedsNullableAttribute());
+
+                if (constraintsNeedNullableAttribute || returnTypeNeedsNullableAttribute || parametersNeedNullableAttribute)
+                {
+                    _factory.CompilationState.ModuleBuilderOpt?.EnsureNullableAttributeExists();
+                }
             }
 
             var oldContainingSymbol = _factory.CurrentFunction;
             try
             {
-                _factory.CurrentFunction = node.Symbol;
+                _factory.CurrentFunction = localFunction;
                 return base.VisitLocalFunctionStatement(node);
             }
             finally
@@ -281,8 +287,23 @@ namespace Microsoft.CodeAnalysis.CSharp
             }
         }
 
+        public override BoundNode VisitDefaultLiteral(BoundDefaultLiteral node)
+        {
+            throw ExceptionUtilities.Unreachable;
+        }
+
         public override BoundNode VisitDeconstructValuePlaceholder(BoundDeconstructValuePlaceholder node)
         {
+            return PlaceholderReplacement(node);
+        }
+
+        public override BoundNode VisitObjectOrCollectionValuePlaceholder(BoundObjectOrCollectionValuePlaceholder node)
+        {
+            if (_inExpressionLambda)
+            {
+                // Expression trees do not include the 'this' argument for members.
+                return node;
+            }
             return PlaceholderReplacement(node);
         }
 
@@ -560,23 +581,25 @@ namespace Microsoft.CodeAnalysis.CSharp
                 _compilation.GetWellKnownType(WellKnownType.System_Index),
                 TypeCompareKind.ConsiderEverything))
             {
-                // array[Index] is compiled to:
-                // array[Index.GetOffset(array.Length)]
+                // array[Index] is treated like a pattern-based System.Index indexing
+                // expression, except that array indexers don't actually exist (they
+                // don't have symbols)
 
                 var arrayLocal = F.StoreToTemp(
                     VisitExpression(node.Expression),
                     out BoundAssignmentOperator arrayAssign);
+
+                var indexOffsetExpr = MakePatternIndexOffsetExpression(
+                    node.Indices[0],
+                    F.ArrayLength(arrayLocal),
+                    out _);
 
                 resultExpr = F.Sequence(
                     ImmutableArray.Create(arrayLocal.LocalSymbol),
                     ImmutableArray.Create<BoundExpression>(arrayAssign),
                     F.ArrayAccess(
                         arrayLocal,
-                        ImmutableArray.Create<BoundExpression>(
-                            F.Call(
-                                VisitExpression(node.Indices[0]),
-                                WellKnownMember.System_Index__GetOffset,
-                                F.ArrayLength(arrayLocal)))));
+                        ImmutableArray.Create(indexOffsetExpr)));
             }
             else if (TypeSymbol.Equals(
                 indexType,
@@ -842,13 +865,13 @@ namespace Microsoft.CodeAnalysis.CSharp
                 }
             }
 
-            public override BoundNode VisitUsingStatement(BoundUsingStatement node)
+            public override BoundNode VisitDefaultLiteral(BoundDefaultLiteral node)
             {
                 Fail(node);
                 return null;
             }
 
-            public override BoundNode VisitAwaitableValuePlaceholder(BoundAwaitableValuePlaceholder node)
+            public override BoundNode VisitUsingStatement(BoundUsingStatement node)
             {
                 Fail(node);
                 return null;
